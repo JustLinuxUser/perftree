@@ -1,7 +1,7 @@
 # perftree
 
-A `perft` debugger. Compare your chess engine to Stockfish and quickly find
-discrepancies in move generation.
+A `perft` debugger. Compare your chess engine to cozy-chess and quickly find
+discrepancies in move generation. It supports chess, and chess960
 
 ## How it works
 
@@ -11,25 +11,20 @@ counts all of the nodes at some given depth from some starting position.  Using
 these results, one can quickly isolate the problematic subtrees and figure out
 where the move generation differs between the two engines.
 
-Instead of comparing the results and walking the tree manually, I use and
-maintain `perftree`, a semi-automatic debugger that does that hard work for
+Instead of comparing the results and walking the tree manually, I use `perftree`,
+a semi-automatic debugger that does that hard work for
 you. It can keep track of where you are in the game tree, evaluate the `perft`
 function at the current position, and compare the results automatically,
 highlighting the differences so they are easy to pick out.
 
 ## Install
 
-`perftree` uses Stockfish, a well-known engine used widely throughout the chess
-community, as a trusted source of perft results. Download and install
-[Stockfish][stockfish] if you haven't already, and make sure you can run it
-from the command line with the command `stockfish`.
+`perftree` uses cozy-chess, a well-known movegen library used widely throughout the chess
+community, as a trusted source of perft results.
 
-Install the `perftree` CLI application from the crates.io repository with
-`cargo`:
+> [!IMPORTANT]
+> This fork of perftree is not yet avilable on crates.io
 
-```
-cargo install perftree-cli
-```
 
 ## Usage
 
@@ -51,7 +46,7 @@ where
 
 - `$moves` is an optional space-separated list of moves from the base position
   to the position to be evaluated, where each move is formatted as
-`$source$target$promotion`, e.g. `e2e4` or `a7b8Q`.
+`$source$target$promotion`, e.g. `e2e4` or `a7b8q`.
 
 The script is expected to output the results of the perft function to standard
 output, with the following format:

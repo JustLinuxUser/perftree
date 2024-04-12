@@ -12,3 +12,6 @@ categories = [
     "development-tools::debugging",
     "development-tools::testing",
 ]
+
+[dependencies]
+cozy-chess = "0.3.4"

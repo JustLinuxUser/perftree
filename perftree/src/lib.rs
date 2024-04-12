@@ -1,4 +1,7 @@
+use core::panic;
+use cozy_chess::{BitBoard, Move, *};
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
@@ -7,6 +10,7 @@ const INITIAL_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 
 pub struct State {
     stockfish: Stockfish,
     script: Script,
+    cozy: Cozy,
     fen: String,
     moves: Vec<String>,
     depth: usize,
@@ -23,6 +27,7 @@ impl State {
             fen: INITIAL_FEN.to_string(),
             moves: Vec::new(),
             depth: 1,
+            cozy: Cozy {},
         })
     }
 
@@ -78,7 +83,7 @@ impl State {
                 .script
                 .perft(&self.fen, &self.moves, self.depth - self.moves.len())?,
             &self
-                .stockfish
+                .cozy
                 .perft(&self.fen, &self.moves, self.depth - self.moves.len())?,
         ))
     }
@@ -230,6 +235,82 @@ pub struct Stockfish {
     out: ChildStdin,
 }
 
+pub struct Cozy {}
+impl Engine for Cozy {
+    fn perft(&mut self, fen: &str, moves: &[String], depth: usize) -> io::Result<Perft> {
+        fn recursive_perft(b: &Board, m: Move, depth: usize) -> u128 {
+            if depth == 0 {
+                return 1;
+            }
+            let mut new_board = b.clone();
+            new_board.play(m);
+
+            let mut total_count = 0u128;
+            new_board.generate_moves(|m| {
+                for m in m {
+                    total_count += recursive_perft(&new_board, m, depth - 1);
+                }
+                false
+            });
+            total_count
+        }
+        let mut child_count = BTreeMap::<String, u128>::new();
+        let mut total_count = 0u128;
+        let mut is_shredder = false;
+        let res = Board::from_fen(fen, false);
+        let mut b = match res {
+            Ok(b) => b,
+            Err(e) => match e {
+                FenParseError::InvalidCastlingRights => {
+                    is_shredder = true;
+                    Board::from_fen(fen, true).expect("successfully able to parse the shredder fen")
+                }
+                _ => panic!("Failed to parse fen"),
+            },
+        };
+        if is_shredder {
+            println!("Dealing with a shredder fen");
+        }
+        for m in moves {
+            b.play(m.parse().unwrap())
+        }
+        b.generate_moves(|m| {
+            for m in m {
+                let from = format!("{}", m.from);
+                let mut to_sq = format!("{}", m.to);
+                if !is_shredder {
+                    if let Some(Piece::King) = b.piece_on(m.from) {
+                        match (m.from, m.to) {
+                            (Square::E1, Square::A1) => to_sq = Square::C1.to_string(),
+                            (Square::E1, Square::H1) => to_sq = Square::G1.to_string(),
+                            (Square::E8, Square::A8) => to_sq = Square::C8.to_string(),
+                            (Square::E8, Square::H8) => to_sq = Square::G8.to_string(),
+                            _ => (),
+                        }
+                    }
+                }
+                let promo = match m.promotion {
+                    Some(Piece::Queen) => "q",
+                    Some(Piece::Rook) => "r",
+                    Some(Piece::Bishop) => "b",
+                    Some(Piece::Knight) => "k",
+                    _ => "",
+                };
+                let move_str = from.clone() + &to_sq + promo;
+                let curr_count = child_count.get(&move_str).unwrap_or(&0);
+                let count = recursive_perft(&b, m, depth - 1);
+                child_count.insert(move_str, curr_count + count);
+                total_count += count;
+            }
+            false
+        });
+        Ok(Perft {
+            total_count,
+            child_count,
+        })
+    }
+}
+
 impl Stockfish {
     pub fn new() -> io::Result<Stockfish> {
         let mut child = Command::new("stockfish")
@@ -251,13 +332,13 @@ impl Stockfish {
 impl Engine for Stockfish {
     fn perft(&mut self, fen: &str, moves: &[String], depth: usize) -> io::Result<Perft> {
         // send command to stockfish
+        let mut buf = String::new();
+
         write!(self.out, "position fen {}", fen)?;
         if !moves.is_empty() {
             write!(self.out, " moves {}", moves.join(" "))?;
         }
         write!(self.out, "\ngo perft {}\n", depth)?;
-
-        let mut buf = String::new();
 
         // parse child counts
         let mut child_count = BTreeMap::new();
@@ -267,17 +348,27 @@ impl Engine for Stockfish {
             if buf.trim().is_empty() {
                 break;
             }
+            if buf.trim().contains("Stockfish") || buf.trim().contains("info") {
+                continue;
+            }
             let mut parts = buf.trim().split(": ");
             let move_ = parts
                 .next()
                 .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "unexpected end of line")
+                    println!("got: {buf}");
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "unexpected end of line, Stockfish",
+                    )
                 })?
                 .to_string();
             let count = parts
                 .next()
                 .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "unexpected end of line")
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "unexpected end of line, Stockfish",
+                    )
                 })?
                 .parse()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
@@ -285,12 +376,23 @@ impl Engine for Stockfish {
         }
 
         // parse total count
-        buf.clear();
-        self.inp.read_line(&mut buf)?;
+        loop {
+            buf.clear();
+            self.inp.read_line(&mut buf)?;
+            if !buf.contains("Stockfish") && !buf.contains("info") && !buf.trim().is_empty() {
+                break;
+            }
+        }
         let mut parts = buf.trim().split(": ");
         let total_count = parts
             .nth(1)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unexpected end of line"))?
+            .ok_or_else(|| {
+                println!("got: {buf}");
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unexpected end of line, Stockfish total count",
+                )
+            })?
             .parse()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
